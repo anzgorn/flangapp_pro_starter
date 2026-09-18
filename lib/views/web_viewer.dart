@@ -210,6 +210,7 @@ class _WebViewerState extends State<WebViewer> {
           },
           onLoadStop: (controller, url) async {
             collection[index].pullToRefreshController?.endRefreshing();
+            injectJs(index);
             setState(() {
               collection[index].progress = 1;
             });
@@ -413,8 +414,23 @@ class _WebViewerState extends State<WebViewer> {
     for (var item in widget.appConfig.cssHideBlock) {
       styles = "$styles$item{ display: none; }";
     }
+    // Custom CSS set by the AI configurator (restyle the wrapped site).
+    if (widget.appConfig.customCss.isNotEmpty) {
+      styles = "$styles\n${widget.appConfig.customCss}";
+    }
     collection[index].controller?.injectCSSCode(
         source: styles
+    );
+  }
+
+  // Custom JS set by the AI configurator, run after each page finishes loading.
+  // Wrapped in try/catch so a bad script can't break the page.
+  void injectJs(index) {
+    if (widget.appConfig.customJs.isEmpty) {
+      return;
+    }
+    collection[index].controller?.evaluateJavascript(
+        source: "try { ${widget.appConfig.customJs} } catch (e) { console.error('custom js error', e); }"
     );
   }
 

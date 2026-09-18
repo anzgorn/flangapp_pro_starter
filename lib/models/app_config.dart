@@ -47,6 +47,9 @@ class AppConfig {
   // Navigation
   final List<NavigationItem> mainNavigation;
   final List<NavigationItem> barNavigation;
+  // Custom code injected into the wrapped website (set by the AI configurator)
+  final String customCss;
+  final String customJs;
 
   AppConfig({
     required this.appName,
@@ -83,7 +86,9 @@ class AppConfig {
     required this.contactBtn,
     required this.backBtn,
     required this.mainNavigation,
-    required this.barNavigation
+    required this.barNavigation,
+    this.customCss = "",
+    this.customJs = ""
   });
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
@@ -141,6 +146,8 @@ class AppConfig {
       backBtn: json['localization']['back'],
       mainNavigation: mainNavigation,
       barNavigation: barNavigation,
+      customCss: json['custom_css'] ?? "",
+      customJs: json['custom_js'] ?? "",
     );
   }
 
