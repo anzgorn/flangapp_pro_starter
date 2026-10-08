@@ -19,13 +19,18 @@ class _SplashscreenState extends State<Splashscreen> {
   final apiClient = Dio(
     BaseOptions(
       baseUrl: Config.apiUrl,
-      connectTimeout: const Duration(seconds: 5),
-      receiveTimeout: const Duration(seconds: 5),
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
       headers: {
         'Accept': 'application/json',
       },
     ),
   );
+
+  // A network failure is retried with these pauses before "App not available" is
+  // shown: right after boot (a fresh emulator, a phone that just woke up) the
+  // network or DNS is often not ready yet, and the first request fails.
+  static const List<int> _retryDelays = [1, 2, 3, 5, 8];
 
   @override
   initState() {
@@ -34,29 +39,42 @@ class _SplashscreenState extends State<Splashscreen> {
   }
 
   Future<void> _getAppConfig() async {
-    try {
-      final response = await apiClient.get("public/bridge/app?uid=${Config.appUid}");
-      if (response.statusCode == 200) {
-        final jsonData = response.data;
-        AppConfig config = AppConfig.fromJson(jsonData);
-        _initApp(config);
-      } else {
+    for (int attempt = 0; ; attempt++) {
+      try {
+        final response = await apiClient.get("public/bridge/app?uid=${Config.appUid}");
+        if (response.statusCode == 200) {
+          AppConfig config = AppConfig.fromJson(response.data);
+          _initApp(config);
+        } else {
+          failLoad();
+        }
+        return;
+      } on DioException catch (e) {
+        // The server answered 4xx: the app was removed or its plan has run out —
+        // retrying won't change that.
+        final status = e.response?.statusCode ?? 0;
+        if ((status >= 400 && status < 500) || attempt >= _retryDelays.length) {
+          failLoad();
+          return;
+        }
+        await Future.delayed(Duration(seconds: _retryDelays[attempt]));
+        if (!mounted) return;
+      } catch (e) {
         failLoad();
+        return;
       }
-    } on DioException {
-      failLoad();
-    } catch (e) {
-      failLoad();
     }
   }
 
   Future<void> _initApp(AppConfig config) async {
     Future.delayed(Duration(seconds: Config.splashDelay), () {
+      if (!mounted) return;
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (BuildContext context) => appHome(config)));
     });
   }
 
   void failLoad() {
+    if (!mounted) return;
     Navigator.pushReplacement(context, MaterialPageRoute(builder: (BuildContext context) => NeedSubscribe()));
   }
 
