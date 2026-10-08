@@ -3,7 +3,7 @@ import 'package:flangapp_pro/config/config.dart';
 import 'package:flangapp_pro/models/app_config.dart';
 import 'package:flangapp_pro/services/hex_color.dart';
 import 'package:flangapp_pro/views/need_subscribe.dart';
-import 'package:flangapp_pro/views/web_viewer.dart';
+import 'package:flangapp_pro/native/native_router.dart';
 import 'package:flangapp_pro/widgets/splash_loader.dart';
 import 'package:flutter/material.dart';
 
@@ -52,9 +52,7 @@ class _SplashscreenState extends State<Splashscreen> {
 
   Future<void> _initApp(AppConfig config) async {
     Future.delayed(Duration(seconds: Config.splashDelay), () {
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (BuildContext context) => WebViewer(
-        appConfig: config,
-      )));
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (BuildContext context) => appHome(config)));
     });
   }
 

@@ -1,4 +1,5 @@
 import 'package:flangapp_pro/models/enum/action_type.dart';
+import 'package:flangapp_pro/native/native_config.dart';
 
 import 'enum/background_mode.dart';
 import 'enum/load_indicator.dart';
@@ -50,6 +51,9 @@ class AppConfig {
   // Custom code injected into the wrapped website (set by the AI configurator)
   final String customCss;
   final String customJs;
+  // Native CMS app (4.2): "webview" or the platform (woocommerce, …) + its API.
+  final String appKind;
+  final NativeConfig? native;
 
   AppConfig({
     required this.appName,
@@ -88,7 +92,9 @@ class AppConfig {
     required this.mainNavigation,
     required this.barNavigation,
     this.customCss = "",
-    this.customJs = ""
+    this.customJs = "",
+    this.appKind = "webview",
+    this.native,
   });
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
@@ -148,6 +154,8 @@ class AppConfig {
       barNavigation: barNavigation,
       customCss: json['custom_css'] ?? "",
       customJs: json['custom_js'] ?? "",
+      appKind: (json['app_kind'] ?? "webview").toString(),
+      native: NativeConfig.fromJson(json['native']),
     );
   }
 

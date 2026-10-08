@@ -43,6 +43,9 @@ dependencies:
   connectivity_plus: ^5.0.2
   dio: ^5.4.0
   onesignal_flutter: ^5.3.0
+  # Native CMS apps (4.2): cart token + product/post HTML
+  shared_preferences: ^2.5.3
+  flutter_widget_from_html_core: ^0.16.1
 
 dev_dependencies:
   flutter_test:
