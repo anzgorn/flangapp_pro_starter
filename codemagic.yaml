@@ -1,59 +1,269 @@
-# SPIKE (no-GitHub builds): one shared codemagic.yaml in the public starter.
-# The app's own files come as a zip from the FlangApp server at build time
-# (FLANGAPP_PACKAGE_URL + FLANGAPP_PACKAGE_TOKEN, passed by POST /builds).
+# FlangApp builds WITHOUT GitHub (Settings → Build API → "Without GitHub").
+#
+# FlangApp starts these workflows through the Codemagic API at the tag of its
+# version, with the build variables
+#   FLANGAPP_PACKAGE_URL  the app package (zip) on the FlangApp server
+#   FLANGAPP_APP_ID       Android package name / iOS bundle id
+#   FLANGAPP_VERSION      version name of the build
+#   FLANGAPP_NOTICE_URL   FlangApp's "build finished" hook
+# The first step downloads the package and unzips it over this template (config,
+# pubspec, manifests, icons, splash, keystore …). Secrets are in the package, not in
+# the build variables (those are printed in the log): flangapp/env/<NAME> and
+# flangapp/env_multiline/<NAME> become environment variables via $CM_ENV.
+#
+# Builds from an own GitHub repository don't use this file: every build commits
+# the app's own codemagic.yaml to the app's branch.
+
+definitions:
+  fetch_package: &fetch_package
+    name: Get the app from FlangApp
+    script: |
+      set -e
+      if [ -z "$FLANGAPP_PACKAGE_URL" ]; then
+        echo "FLANGAPP_PACKAGE_URL is not set: start this build from FlangApp."
+        exit 1
+      fi
+      curl -fsSL --retry 3 --retry-delay 5 "$FLANGAPP_PACKAGE_URL" -o /tmp/flangapp-package.zip
+      unzip -o -q /tmp/flangapp-package.zip -d "$CM_BUILD_DIR"
+      if [ -d "$CM_BUILD_DIR/flangapp/env" ]; then
+        for f in "$CM_BUILD_DIR"/flangapp/env/*; do
+          [ -f "$f" ] || continue
+          echo "$(basename "$f")=$(cat "$f")" >> "$CM_ENV"
+        done
+      fi
+      if [ -d "$CM_BUILD_DIR/flangapp/env_multiline" ]; then
+        for f in "$CM_BUILD_DIR"/flangapp/env_multiline/*; do
+          [ -f "$f" ] || continue
+          { echo "$(basename "$f")<<FLANGAPP_EOF"; cat "$f"; echo "FLANGAPP_EOF"; } >> "$CM_ENV"
+        done
+      fi
+      rm -rf "$CM_BUILD_DIR/flangapp" /tmp/flangapp-package.zip
+      echo "App package applied: $(git -C "$CM_BUILD_DIR" status --short | wc -l | tr -d ' ') files changed."
+  local_properties: &local_properties
+    name: Set up local.properties
+    script: |
+      echo "flutter.sdk=$HOME/programs/flutter" > "$FCI_BUILD_DIR/android/local.properties"
+  pub_get: &pub_get
+    name: Get Flutter packages
+    script: |
+      cd . && flutter packages pub get
+  pod_install: &pod_install
+    name: Install pods
+    script: |
+      find . -name "Podfile" -execdir pod install \;
+  ios_min_version: &ios_min_version
+    name: Set iOS 15.0 as the minimum version of the Flutter framework
+    script: |
+      /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 15.0" ios/Flutter/AppFrameworkInfo.plist || true
+  notice: &notice
+    scripts:
+      - name: HTTP notification
+        script: |
+          curl "$FLANGAPP_NOTICE_URL"
+  keychain_initialize: &keychain_initialize
+    name: Set up keychain to be used for codesigning using Codemagic CLI 'keychain' command
+    script: |
+      keychain initialize
+  fetch_signing_files: &fetch_signing_files
+    name: Fetch signing files
+    script: |
+      app-store-connect fetch-signing-files "$FLANGAPP_APP_ID" --type IOS_APP_STORE --create --log-api-calls --verbose
+  add_certificates: &add_certificates
+    name: Use system default keychain
+    script: |
+      keychain add-certificates
+  use_profiles: &use_profiles
+    name: Set up code signing settings on Xcode project
+    script: |
+      xcode-project use-profiles
+
 workflows:
-  android-workflow:
-    name: Flangapp PRO Android (no GitHub spike)
+  android-apk-workflow:
+    name: Flangapp PRO Android apk
     max_build_duration: 30
     environment:
+      vars:
+        VERSION_NAME: "1.0.$BUILD_NUMBER"
+        BUILD_NUMBER: $BUILD_NUMBER
       flutter: 3.29.2
       xcode: latest
       cocoapods: default
     scripts:
-      - name: Fetch the FlangApp package
-        script: |
-          set -e
-          if [ -z "$FLANGAPP_PACKAGE_URL" ]; then echo "FLANGAPP_PACKAGE_URL is not set"; exit 1; fi
-          AUTH=()
-          if [ -n "$FLANGAPP_PACKAGE_TOKEN" ]; then AUTH=(-H "Authorization: Bearer $FLANGAPP_PACKAGE_TOKEN"); fi
-          curl -fsSL --retry 3 "${AUTH[@]}" "$FLANGAPP_PACKAGE_URL" -o /tmp/flangapp-package.zip
-          unzip -o -q /tmp/flangapp-package.zip -d "$CM_BUILD_DIR"
-          if [ -d "$CM_BUILD_DIR/flangapp/env" ]; then
-            for f in "$CM_BUILD_DIR"/flangapp/env/*; do
-              name=$(basename "$f")
-              { echo "$name<<FLANGAPP_EOF"; cat "$f"; echo; echo "FLANGAPP_EOF"; } >> "$CM_ENV"
-            done
-            rm -rf "$CM_BUILD_DIR/flangapp"
-          fi
-          git -C "$CM_BUILD_DIR" status --short
-      - name: Spike checks
-        script: |
-          echo "tag/branch: ${CM_TAG:-} ${CM_BRANCH:-}"
-          echo "version from API: $FLANGAPP_VERSION"
-          echo "API secret (masked?): $SPIKE_API_SECRET"
-          echo "single from package: $SPIKE_SINGLE"
-          echo "multiline lines: $(printf '%s\n' "$SPIKE_MULTILINE_KEY" | wc -l)"
-          printf '%s\n' "$SPIKE_MULTILINE_KEY" | head -2
-          grep -n "SPIKE NO GITHUB OK" lib/config/config.dart
-          grep -n "applicationId" android/app/build.gradle.kts
-      - name: Set up local.properties
-        script: |
-          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
-      - name: Get Flutter packages
-        script: |
-          flutter packages pub get
+      - *fetch_package
+      - *local_properties
+      - *pub_get
+      - *pod_install
       - name: Build APK with Flutter
         script: |
-          flutter build apk --release --no-tree-shake-icons --build-name=$FLANGAPP_VERSION --build-number=$BUILD_NUMBER
-      - name: Check the APK
+          cd . && flutter build apk --release --no-tree-shake-icons --build-name=$VERSION_NAME --build-number=$BUILD_NUMBER
+    artifacts:
+      - build/**/outputs/**/*.apk
+      - build/**/outputs/**/*.aab
+      - build/**/outputs/**/mapping.txt
+      - flutter_drive.log
+    publishing: *notice
+
+  android-aab-workflow:
+    name: Flangapp PRO Android aab
+    max_build_duration: 30
+    environment:
+      vars:
+        VERSION_NAME: "1.0.$BUILD_NUMBER"
+        BUILD_NUMBER: $BUILD_NUMBER
+      flutter: 3.29.2
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - *fetch_package
+      - *local_properties
+      - *pub_get
+      - *pod_install
+      - name: Build AAB with Flutter
         script: |
+          cd . && flutter build appbundle --release --no-tree-shake-icons --build-name=$VERSION_NAME --build-number=$BUILD_NUMBER
+    artifacts:
+      - build/**/outputs/**/*.apk
+      - build/**/outputs/**/*.aab
+      - build/**/outputs/**/mapping.txt
+      - flutter_drive.log
+    publishing: *notice
+
+  ios-workflow:
+    name: Flangapp PRO iOS without publication
+    max_build_duration: 30
+    environment:
+      vars:
+        XCODE_WORKSPACE: "Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+      flutter: 3.29.2
+      xcode: 26.0
+      cocoapods: default
+    scripts:
+      - *fetch_package
+      - *keychain_initialize
+      - *fetch_signing_files
+      - *add_certificates
+      - *use_profiles
+      - *pub_get
+      - *ios_min_version
+      - *pod_install
+      - name: Flutter build ipa and automatic versioning
+        script: |
+          flutter build ipa --release --no-tree-shake-icons \
+          --build-name=$FLANGAPP_VERSION \
+          --build-number=1 \
+          --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing: *notice
+
+  ios-publish-workflow:
+    name: Flangapp PRO iOS with publication
+    max_build_duration: 30
+    environment:
+      vars:
+        XCODE_WORKSPACE: "Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+      flutter: 3.29.2
+      xcode: 26.0
+      cocoapods: default
+    scripts:
+      - *fetch_package
+      - *keychain_initialize
+      - *fetch_signing_files
+      - *add_certificates
+      - *use_profiles
+      - *pub_get
+      - *ios_min_version
+      - *pod_install
+      - name: Flutter build ipa and automatic versioning
+        script: |
+          flutter build ipa --release --no-tree-shake-icons \
+          --build-name=$FLANGAPP_VERSION \
+          --build-number=1 \
+          --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+      scripts:
+        - name: HTTP notification
+          script: |
+            curl "$FLANGAPP_NOTICE_URL"
+
+  android-preview-workflow:
+    name: Flangapp PRO Android preview
+    max_build_duration: 30
+    environment:
+      flutter: 3.29.2
+    scripts:
+      - *fetch_package
+      - *local_properties
+      - *pub_get
+      - name: Build APK for Appetize (release, signed with the debug key)
+        script: |
+          flutter build apk --release --no-tree-shake-icons \
+          --build-name=$FLANGAPP_VERSION \
+          --build-number=1
+    artifacts:
+      - build/**/outputs/**/*.apk
+      - flutter_drive.log
+    publishing: *notice
+
+  ios-simulator-workflow:
+    name: Flangapp PRO iOS Simulator preview
+    max_build_duration: 30
+    environment:
+      flutter: 3.29.2
+      xcode: 26.0
+      cocoapods: default
+    scripts:
+      - *fetch_package
+      - *pub_get
+      - *pod_install
+      - name: Flutter build for iOS Simulator (no code signing)
+        script: |
+          flutter build ios --simulator --no-codesign --debug --no-tree-shake-icons \
+          --build-name=$FLANGAPP_VERSION \
+          --build-number=1
+      - name: Zip the .app for Appetize
+        script: |
+          cd build/ios/iphonesimulator && zip -r -y Runner.app.zip Runner.app
+    artifacts:
+      - build/ios/iphonesimulator/Runner.app.zip
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing: *notice
+
+  # TEST BRANCH ONLY: the shared steps + checks of the package and $CM_ENV.
+  nogh-selftest-workflow:
+    name: No-GitHub self test
+    max_build_duration: 30
+    environment:
+      flutter: 3.29.2
+    scripts:
+      - *fetch_package
+      - name: Checks
+        script: |
+          echo "single: [$SPIKE_SINGLE]"
+          echo "multiline lines: $(printf '%s' "$SPIKE_MULTILINE_KEY" | wc -l)"
+          printf '%s\n' "$SPIKE_MULTILINE_KEY" | tail -1
+          echo "app id: $FLANGAPP_APP_ID version: $FLANGAPP_VERSION"
+          test ! -d flangapp && echo "flangapp/ removed"
+      - *local_properties
+      - *pub_get
+      - name: Build APK
+        script: |
+          flutter build apk --release --no-tree-shake-icons --build-name=$FLANGAPP_VERSION --build-number=$BUILD_NUMBER
           AAPT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/aapt | tail -1)
           "$AAPT" dump badging build/app/outputs/flutter-apk/app-release.apk | grep -E "^package:|^application-label:"
     artifacts:
       - build/**/outputs/**/*.apk
-    publishing:
-      scripts:
-        - name: Env in publishing
-          script: |
-            echo "publishing sees multiline lines: $(printf '%s\n' "$SPIKE_MULTILINE_KEY" | wc -l)"
-            echo "publishing sees single: $SPIKE_SINGLE"
+    publishing: *notice
