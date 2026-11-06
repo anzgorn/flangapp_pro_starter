@@ -14,7 +14,9 @@ workflows:
         script: |
           set -e
           if [ -z "$FLANGAPP_PACKAGE_URL" ]; then echo "FLANGAPP_PACKAGE_URL is not set"; exit 1; fi
-          curl -fsSL --retry 3 -H "Authorization: Bearer $FLANGAPP_PACKAGE_TOKEN" "$FLANGAPP_PACKAGE_URL" -o /tmp/flangapp-package.zip
+          AUTH=()
+          if [ -n "$FLANGAPP_PACKAGE_TOKEN" ]; then AUTH=(-H "Authorization: Bearer $FLANGAPP_PACKAGE_TOKEN"); fi
+          curl -fsSL --retry 3 "${AUTH[@]}" "$FLANGAPP_PACKAGE_URL" -o /tmp/flangapp-package.zip
           unzip -o -q /tmp/flangapp-package.zip -d "$CM_BUILD_DIR"
           if [ -d "$CM_BUILD_DIR/flangapp/env" ]; then
             for f in "$CM_BUILD_DIR"/flangapp/env/*; do
