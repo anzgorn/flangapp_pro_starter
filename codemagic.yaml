@@ -1,0 +1,57 @@
+# SPIKE (no-GitHub builds): one shared codemagic.yaml in the public starter.
+# The app's own files come as a zip from the FlangApp server at build time
+# (FLANGAPP_PACKAGE_URL + FLANGAPP_PACKAGE_TOKEN, passed by POST /builds).
+workflows:
+  android-workflow:
+    name: Flangapp PRO Android (no GitHub spike)
+    max_build_duration: 30
+    environment:
+      flutter: 3.29.2
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Fetch the FlangApp package
+        script: |
+          set -e
+          if [ -z "$FLANGAPP_PACKAGE_URL" ]; then echo "FLANGAPP_PACKAGE_URL is not set"; exit 1; fi
+          curl -fsSL --retry 3 -H "Authorization: Bearer $FLANGAPP_PACKAGE_TOKEN" "$FLANGAPP_PACKAGE_URL" -o /tmp/flangapp-package.zip
+          unzip -o -q /tmp/flangapp-package.zip -d "$CM_BUILD_DIR"
+          if [ -d "$CM_BUILD_DIR/flangapp/env" ]; then
+            for f in "$CM_BUILD_DIR"/flangapp/env/*; do
+              name=$(basename "$f")
+              { echo "$name<<FLANGAPP_EOF"; cat "$f"; echo; echo "FLANGAPP_EOF"; } >> "$CM_ENV"
+            done
+            rm -rf "$CM_BUILD_DIR/flangapp"
+          fi
+          git -C "$CM_BUILD_DIR" status --short
+      - name: Spike checks
+        script: |
+          echo "tag/branch: ${CM_TAG:-} ${CM_BRANCH:-}"
+          echo "version from API: $FLANGAPP_VERSION"
+          echo "API secret (masked?): $SPIKE_API_SECRET"
+          echo "single from package: $SPIKE_SINGLE"
+          echo "multiline lines: $(printf '%s\n' "$SPIKE_MULTILINE_KEY" | wc -l)"
+          printf '%s\n' "$SPIKE_MULTILINE_KEY" | head -2
+          grep -n "SPIKE NO GITHUB OK" lib/config/config.dart
+          grep -n "applicationId" android/app/build.gradle.kts
+      - name: Set up local.properties
+        script: |
+          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+      - name: Build APK with Flutter
+        script: |
+          flutter build apk --release --no-tree-shake-icons --build-name=$FLANGAPP_VERSION --build-number=$BUILD_NUMBER
+      - name: Check the APK
+        script: |
+          AAPT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/aapt | tail -1)
+          "$AAPT" dump badging build/app/outputs/flutter-apk/app-release.apk | grep -E "^package:|^application-label:"
+    artifacts:
+      - build/**/outputs/**/*.apk
+    publishing:
+      scripts:
+        - name: Env in publishing
+          script: |
+            echo "publishing sees multiline lines: $(printf '%s\n' "$SPIKE_MULTILINE_KEY" | wc -l)"
+            echo "publishing sees single: $SPIKE_SINGLE"
